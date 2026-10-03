@@ -1,0 +1,13 @@
+.env
+.env.local
+node_modules/
+.next/
+dist/
+.turbo/
+__pycache__/
+*.pyc
+.venv/
+data/
+*.log
+.DS_Store
+services/api/.pytest_cache/

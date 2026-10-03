@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+
+# Keep packages inside the repo so Turbopack can resolve them (a global virtual store
+# symlinks outside the workspace root, which Next.js refuses to compile).
+enableGlobalVirtualStore: false
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver

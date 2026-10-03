@@ -1,0 +1,22 @@
+{
+  "name": "unisona",
+  "private": true,
+  "packageManager": "pnpm@10.18.3",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "cd services/api && uv run python -m unisona.main",
+    "dev:widget": "pnpm --filter widget dev",
+    "build": "turbo run build",
+    "build:widget": "pnpm --filter widget build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "setup": "node scripts/setup.mjs",
+    "db:migrate": "cd services/api && uv run alembic upgrade head",
+    "test:api": "cd services/api && uv run pytest -q",
+    "eval": "cd services/api && uv run python -m unisona.evals.cli"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  }
+}
