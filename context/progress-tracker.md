@@ -82,6 +82,12 @@ Update this file after every meaningful implementation change.
     - The AI page builder failed when the model returned a list.
     - Public submits waited on side effects (now backgrounded).
 
+- Voice language fix (2026-10-03): Pipecat's Whisper services (Groq/OpenAI/local) default to English, so Whisper
+  *translated* Hindi/Tamil/any speech into English and the agent answered in English. STT now auto-detects (a hint is
+  used only for single-language agents), and each voice turn adds a sticky per-turn reply-language rule (Hinglish is
+  written in Devanagari for natural pronunciation). Verified with real calls: Hindi → Hindi, Tamil → Tamil, with Edge
+  auto-switching to native voices. The Voice tab now explains auto-switching and warns about voices that can't speak Indian languages.
+
 ## In Progress
 
 - None.

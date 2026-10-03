@@ -359,7 +359,10 @@ class KnowledgeInjector(FrameProcessor):
             p.get("text", "") for p in last_user.get("content", []) if isinstance(p, dict))
         if len(text.strip()) < 3 or not _MEANINGFUL.search(text):
             return True  # background noise transcribed as punctuation: don't answer it
-        self.sess.language = detect(text)
+        from ..brain.lang import sticky
+
+        self.sess.language = sticky(self.sess.language if self.sess.meta.get("lang_set") else None, text, detect(text))
+        self.sess.meta["lang_set"] = True
         if await self._guards(text):
             return True
         emo = emotion_mod.score(text)
@@ -384,6 +387,13 @@ class KnowledgeInjector(FrameProcessor):
         if flows.enabled(self.sess.cfg):
             self.sess.flow_state = self.sess.flow_state or flows.initial_state(self.sess.cfg)
             cleaned.insert(idx, {"role": "system", "content": f"{FLOW_MARK} {flows.prompt_section(self.sess.cfg, self.sess.flow_state)}"})
+        from ..brain.lang import voice_reply_instruction
+
+        langs = self.sess.cfg.get("languages") or {}
+        # The language rule sits right next to the caller's words: a generic line in the system prompt loses to an
+        # English prompt + English greeting, and the model would answer a Hindi caller in English.
+        cleaned.insert(idx, {"role": "system", "content": f"{KNOWLEDGE_MARK} LANGUAGE: " + voice_reply_instruction(
+            self.sess.language, bool(langs.get("mirror_user", True)), langs.get("primary"))})
         if escalate and self.sess.cfg["handoff"].get("on_frustration", True):
             cleaned.insert(idx, {"role": "system", "content": f"{KNOWLEDGE_MARK} The customer sounds upset. Acknowledge their frustration sincerely in one short sentence, "
                                                                 "then offer to connect them with a person (transfer_call or handoff_to_human)."})
@@ -472,6 +482,34 @@ def _lang_enum(cfg: dict):
         return Language("en-IN")
 
 
+def _stt_language(cfg: dict) -> str | None:
+    """Whisper language hint. Pipecat defaults Whisper services to English, which makes Whisper *translate* Hindi, Tamil
+    or any other speech into English before the agent ever sees it. We auto-detect unless the agent speaks one language."""
+    supported = [x for x in (cfg.get("languages") or {}).get("supported") or [] if x]
+    if len(supported) == 1:
+        return supported[0].split("-")[0].lower()
+    return None
+
+
+def _auto_language_stt(base):
+    """Subclass a Whisper-API STT service so `language` is omitted (auto-detect) when no hint is set."""
+
+    class AutoLanguage(base):
+        async def _transcribe(self, audio: bytes):
+            kwargs = {"file": ("audio.wav", audio, "audio/wav"), "model": self._settings.model, "response_format": "json"}
+            lang = self._settings.language
+            if lang:
+                kwargs["language"] = str(lang)
+            if getattr(self._settings, "prompt", None):
+                kwargs["prompt"] = self._settings.prompt
+            if getattr(self._settings, "temperature", None) is not None:
+                kwargs["temperature"] = self._settings.temperature
+            return await self._client.audio.transcriptions.create(**kwargs)
+
+    AutoLanguage.__name__ = f"AutoLanguage{base.__name__}"
+    return AutoLanguage
+
+
 def _stt(cfg: dict, groq_key: str | None, openai_key: str | None, deepgram_key: str | None, sarvam_key: str | None = None):
     choice = cfg["voice"].get("stt_provider", "auto")
     keywords = ", ".join(cfg["voice"].get("keywords") or [])
@@ -492,16 +530,22 @@ def _stt(cfg: dict, groq_key: str | None, openai_key: str | None, deepgram_key: 
     if choice in {"auto", "groq"} and groq_key:
         from pipecat.services.groq.stt import GroqSTTService
 
-        return GroqSTTService(api_key=groq_key, settings=GroqSTTService.Settings(model="whisper-large-v3-turbo", prompt=keywords or None)), "groq"
+        svc = _auto_language_stt(GroqSTTService)(api_key=groq_key, settings=GroqSTTService.Settings(model="whisper-large-v3-turbo", prompt=keywords or None))
+        svc._settings.language = _stt_language(cfg)
+        return svc, "groq"
     if choice in {"auto", "openai"} and openai_key:
         from pipecat.services.openai.stt import OpenAISTTService
 
-        return OpenAISTTService(api_key=openai_key), "openai"
+        svc = _auto_language_stt(OpenAISTTService)(api_key=openai_key)
+        svc._settings.language = _stt_language(cfg)
+        return svc, "openai"
     if settings.local_stt_enabled:
         from pipecat.services.whisper.stt import WhisperSTTService
 
         feature_unavailable("Cloud speech-to-text (fast)", "GROQ_API_KEY", "falling back to local Whisper on CPU, slower")
-        return WhisperSTTService(device="auto", compute_type="int8", settings=WhisperSTTService.Settings(model=settings.local_stt_model)), "whisper_local"
+        svc = WhisperSTTService(device="auto", compute_type="int8", settings=WhisperSTTService.Settings(model=settings.local_stt_model))
+        svc._settings.language = _stt_language(cfg)  # None = faster-whisper auto-detect
+        return svc, "whisper_local"
     raise RuntimeError("No speech-to-text available: add a Groq key or enable LOCAL_STT_ENABLED.")
 
 

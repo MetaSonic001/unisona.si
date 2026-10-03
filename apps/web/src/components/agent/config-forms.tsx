@@ -191,7 +191,14 @@ export function VoiceForm({ cfg, set }: FormProps) {
                 </div>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">When a caller switches language, the agent automatically switches to the matching voice.</p>
+            {(() => {
+              const eng = (voiceId || "edge:").split(":")[0];
+              if (["kokoro", "groq", "deepgram"].includes(eng))
+                return <p className="rounded-md bg-warning/10 p-2 text-[11px] text-warning">This voice only speaks a few languages. The agent still replies in the caller&apos;s language, but this voice can&apos;t pronounce Hindi or other Indian languages. Pick an Edge, Sarvam, ElevenLabs, Cartesia or OpenAI voice for multilingual callers.</p>;
+              if (eng === "edge")
+                return <p className="text-[11px] text-muted-foreground">The agent always replies in the caller&apos;s language (Hindi, Hinglish, Tamil…), even if this voice isn&apos;t multilingual: each sentence is spoken by a native voice for that language, or by the voice you pick per language below.</p>;
+              return <p className="text-[11px] text-muted-foreground">The agent replies in the caller&apos;s language; this provider&apos;s multilingual models speak it with the selected voice.</p>;
+            })()}
             <SliderField label="Speaking speed" value={Math.round((cfg.voice.speed ?? 1) * 100)} min={70} max={130} onChange={(v) => set("voice.speed", v / 100)} format={(v) => `${(v / 100).toFixed(2)}×`} />
           </Section>
         </Card>

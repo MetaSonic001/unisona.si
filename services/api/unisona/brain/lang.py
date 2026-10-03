@@ -60,3 +60,28 @@ NAMES = {"en": "English", "hi": "Hindi", "hinglish": "Hinglish (Hindi in Latin s
          "bn": "Bengali", "mr": "Marathi", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "ur": "Urdu", "ar": "Arabic",
          "es": "Spanish", "fr": "French", "de": "German", "pt": "Portuguese", "ja": "Japanese", "zh": "Chinese",
          "it": "Italian", "ru": "Russian", "id": "Indonesian", "tr": "Turkish", "ne": "Nepali", "pa": "Punjabi", "or": "Odia"}
+
+
+def sticky(previous: str | None, text: str, current: str) -> str:
+    """Keep the conversation language when a short reply is ambiguous ("ok", "yes", "haan ji")."""
+    if previous and previous != "en" and current == "en" and len(text.split()) <= 3:
+        return previous
+    return current
+
+
+def voice_reply_instruction(code: str, mirror: bool = True, primary: str | None = None) -> str:
+    """Per-turn instruction for spoken replies, written in the script the TTS voice pronounces natively.
+
+    Hinglish callers get a natural Hindi-English mix written in Devanagari, so the Hindi voice says it correctly
+    (Roman-script Hindi is read with English pronunciation by most voices).
+    """
+    if not mirror:
+        return f"Reply in {NAMES.get((primary or 'en').split('-')[0], primary or 'English')}."
+    if code == "en":
+        return "The caller is speaking English. Reply in English."
+    if code == "hinglish":
+        return ("The caller is speaking Hinglish (Hindi mixed with English). Reply in the same natural Hindi-English mix, "
+                "but WRITE it in Devanagari script (e.g. \"जी हाँ, आपका appointment Saturday सुबह नौ बजे है\" -> write English words in Devanagari too: "
+                "\"अपॉइंटमेंट\"), so the voice pronounces it correctly. Never answer in English only.")
+    name = NAMES.get(code, code)
+    return f"The caller is speaking {name}. Reply ONLY in {name}, written in its native script. Never switch to English unless they do."
