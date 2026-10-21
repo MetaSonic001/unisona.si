@@ -46,7 +46,11 @@
 - **Postgres (Supabase, schema `app`)**: workspaces, members, encrypted provider keys, agents and versions, knowledge
   metadata, chunks (text), conversations, messages, traces, calls, contacts/identities/facts, CRM, campaigns, automations,
   jobs, evals and usage. Tables live outside `public`, so the Supabase Data API can never expose them.
-- **Local disk `data/` (repo root, `DATA_DIR`)**: Chroma vectors, BM25 indexes, DuckDB tables, uploaded files, call recordings and the TTS preview cache.
+- **Local disk `data/` (repo root, `DATA_DIR`)**: Chroma vectors, BM25 indexes, DuckDB tables, model cache, TTS preview cache.
+  This is a rebuildable cache. On an ephemeral host disk, `knowledge/heal.py` re-embeds chunks from Postgres and
+  re-ingests spreadsheet sources at startup.
+- **Supabase Storage (private bucket `unisona-files`, when `SUPABASE_SECRET_KEY` is set)**: uploaded files and call
+  recordings (`knowledge/files.py`, keys `<ws>/<kind>/<name>`). Local disk is written first and used as a read cache.
 - **Browser**: only the session id for anonymous widget/hosted chats.
 
 ## Auth and Access Model
@@ -69,4 +73,12 @@
 5. Untrusted content (retrieved docs, tool output, user text) is fenced as data and never concatenated into system instructions.
 6. Request handlers don't block on long work. Ingestion, analysis, campaigns and evals run as jobs; public submits background their side effects.
 7. Every outbound contact (call, message, campaign, automation, hook) passes the compliance check (DND, opt-out, consent, hours).
-8. No Docker. Everything runs locally with `uv` + `pnpm`.
+8. No Docker. Everything runs locally with `uv` + `pnpm`; hosted on Vercel (web, `apps/web/vercel.json`) and Render's
+   native Python runtime (API, `render.yaml`). See `docs/deploy.md`.
+9. Production safety net (`unisona/ops.py`):
+   - Every unhandled request error is logged once with a request id and traceback, and answers JSON 500.
+   - Database outages answer 503 and are logged once per outage.
+   - The worker and scheduler are supervised and restarted with backoff.
+   - Fatal states (out of memory, event loop blocked 90 s) exit the process so the host restarts it.
+   - `/health` is liveness only; `/health/ready` checks the database.
+10. The API is a single instance: the worker, scheduler and Telegram pollers live in the API process. Scale up, not out.

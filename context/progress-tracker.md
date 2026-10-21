@@ -88,6 +88,42 @@ Update this file after every meaningful implementation change.
   written in Devanagari for natural pronunciation). Verified with real calls: Hindi → Hindi, Tamil → Tamil, with Edge
   auto-switching to native voices. The Voice tab now explains auto-switching and warns about voices that can't speak Indian languages.
 
+- Production readiness (2026-10-20):
+  - **Outage found:** the "Can't reach the API" errors came from the Supabase project being paused after 7 idle days. It was restored.
+  - **API safety net:** `unisona/ops.py`.
+    - Request ids; a one-time traceback log per error; JSON 500/503 inside CORS, so the browser sees the reason.
+    - DB-outage detection, logged once per outage; worker and scheduler back off.
+    - Supervised background loops; asyncio exception handler; event-loop watchdog; fatal exit, so the host restarts.
+    - `/health` (liveness) and `/health/ready` (DB).
+  - **Plain production logs** (`LOG_FORMAT=plain`, the default when `UNISONA_ENV=production`).
+  - **Ports:** `PORT` is honoured for hosts; a local `API_PORT` wins over it.
+  - **Uploads and recordings** are mirrored to Supabase Storage (`knowledge/files.py`).
+  - **Startup self-heal** of Chroma/BM25 from Postgres chunks, and of DuckDB tables (`knowledge/heal.py`).
+  - **TURN support** for browser voice behind HTTP-only hosts: `voice/ice.py` and `/public/ice-servers`, Cloudflare or static credentials. The web app and widget fetch the servers.
+  - **Optional engines:** Kokoro and local Whisper are skipped when not installed; `RERANKER_ENABLED` flag.
+  - **Build-time model prefetch:** `python -m unisona.prefetch`.
+  - **Deploy config:** `render.yaml` (Blueprint, Standard plan, migrations on start), `apps/web/vercel.json` (builds the widget into `public/widget`; the API redirects `/widget/*` there when it has no local build), `docs/deploy.md`.
+  - **Fixed along the way:**
+    - Edge TTS returned 403 for every voice. Microsoft rotated the token; `edge-tts` was upgraded to 7.3.1, Render's build upgrades it on every deploy, and the error is now explained once.
+    - `pnpm dev` died on every backend code edit on Windows. uvicorn's reload sends CTRL_C_EVENT to the whole console; the API now runs in its own process group and exits if the runner disappears.
+    - Short Latin-script messages ("Order ORD-1001") were detected as German. Fewer than 4 words now means English, and the conversation language is sticky on text channels too.
+  - **Measured:** the API uses about 1.0 GB RAM warmed up (0.76 GB without the reranker), hence Render Standard.
+  - **Verified:**
+    - 29 unit tests; smoke suite 32/32; voice E2E (WebRTC, 19 s of agent speech).
+    - Production-mode boot.
+    - Simulated DB outage (503 + one log line).
+    - Empty-disk self-heal (3 knowledge bases rebuilt, correct retrieval).
+    - Storage round-trip after local wipe.
+    - `next build`.
+
+- Auto-restore of a paused Supabase project (2026-10-21), `unisona/supabase_wake.py`:
+  - Triggers whenever the database becomes unreachable, including at startup.
+  - With `SUPABASE_ACCESS_TOKEN` (local only) it checks the project status and calls the Management API restore.
+  - It polls until healthy, then re-runs the startup steps that needed the DB: index heal, voice prewarm, Telegram pollers.
+  - Meanwhile 503s explain that the database is waking up.
+  - Without a token it logs the exact dashboard link.
+  - Verified: the no-token and invalid-token paths. A real restore was not exercised (no token available).
+
 ## In Progress
 
 - None.
@@ -107,7 +143,7 @@ Update this file after every meaningful implementation change.
 
 ## Open Questions
 
-- Production hosting target (API on a VM with a public IP for WebRTC/telephony; web on Vercel?).
+- Hosting decided: Vercel (web) + Render Standard (API). A fully free alternative is an Oracle Always Free VM (no TURN needed).
 - Move the Supabase project to the Mumbai region to cut ~130 ms per DB round-trip from India (form submit is 3.5 s today, mostly round-trips).
 
 ## Architecture Decisions

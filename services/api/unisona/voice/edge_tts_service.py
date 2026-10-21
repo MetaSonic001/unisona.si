@@ -24,6 +24,21 @@ from ..log import get_logger
 from ..providers.voices import LANG_BY_CODE
 
 log = get_logger("tts")
+_rejected_logged = False
+
+
+def _report(what: str, e: Exception) -> None:
+    """403 from Microsoft means the edge-tts client version is outdated (Microsoft rotates the token version):
+    say so once, clearly, instead of one cryptic warning per phrase."""
+    global _rejected_logged
+    if "403" in str(e):
+        if not _rejected_logged:
+            _rejected_logged = True
+            log.error("Edge TTS is rejecting requests (HTTP 403): the edge-tts library is out of date. Fix: "
+                      "`cd services/api && uv lock --upgrade-package edge-tts && uv sync` (hosted: redeploy, the build "
+                      "installs the latest edge-tts). Until then, pick another voice engine (Sarvam/Cartesia/Deepgram).")
+        return
+    log.warning(f"{what}: {e}")
 
 # Short phrases (greetings, "Are you still there?", fillers) are synthesized once and replayed instantly.
 _CACHE: OrderedDict[tuple[str, str, str], tuple[np.ndarray, int]] = OrderedDict()
@@ -73,7 +88,7 @@ async def prewarm(voice: str | None, text: str, speed: float = 1.0, cfg: dict | 
     try:
         await task
     except Exception as e:
-        log.warning(f"Prewarm failed for {voice}: {e}")
+        _report(f"Prewarm failed for {voice}", e)
     finally:
         _PENDING.pop(key, None)
 
@@ -216,7 +231,7 @@ class EdgeTTSService(TTSService):
                 if audio:
                     yield TTSAudioRawFrame(audio=audio, sample_rate=self.sample_rate, num_channels=1, context_id=context_id)
         except Exception as e:
-            log.warning(f"Edge TTS failed for voice {voice}: {e}")
+            _report(f"Edge TTS failed for voice {voice}", e)
             yield ErrorFrame(error=f"Edge TTS error: {e}")
         finally:
             await self.stop_ttfb_metrics()

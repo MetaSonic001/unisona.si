@@ -259,6 +259,9 @@ docs/                Product plan
 
 ## 11. Troubleshooting
 
+- **"Can't reach the Unisona API" + `tenant/user postgres.<ref> not found` in the API log**: the Supabase project is **paused** (free projects pause after 7 days without activity). Restore it in the Supabase dashboard; the API recovers by itself within a minute. With `SUPABASE_ACCESS_TOKEN` in `.env` (a personal access token, local only) the API detects the pause and restores the project itself (takes 2–5 minutes).
+- **Voices are silent, `Edge TTS is rejecting requests (HTTP 403)` in the log**: Microsoft rotated the free-voice token. Run `cd services/api && uv lock --upgrade-package edge-tts && uv sync`.
+
 - **Every request feels slow (≈2 s)**: use `127.0.0.1` rather than `localhost` in `API_URL`/`NEXT_PUBLIC_API_URL` (Windows IPv6 fallback).
 - **High latency from India**: each DB round-trip to a Tokyo/US Supabase project costs 100–250 ms. Create the Supabase project in **Mumbai (ap-south-1)**.
 - **`DATABASE_URL` errors**: use the **session** pooler (port 5432), not the transaction pooler (6543) and not the IPv6-only direct host.
@@ -268,7 +271,18 @@ docs/                Product plan
 - **Feature "SKIPPED" in logs**: add the named key to `.env` (platform-wide) or to Settings → AI providers (workspace).
 - **Reset the local index**: stop the API, delete `data/chroma` (repo root) and re-ingest from the Knowledge page.
 
-## 12. Security notes
+## 12. Deploying
+
+Web app on **Vercel** (`apps/web/vercel.json`), API on **Render** (`render.yaml` Blueprint, native Python, no Docker). The step-by-step guide covers costs, environment variables, webhooks, logs, restarts and rollbacks: **[docs/deploy.md](docs/deploy.md)**.
+
+Production behaviour built into the API:
+- **Logs:** plain logs with request IDs and full tracebacks.
+- **Errors:** 503 JSON (not a crash) when the database is down; the worker and scheduler back off and restart themselves.
+- **Fatal states:** the process exits on purpose (out of memory, stuck event loop) so Render restarts it clean.
+- **Restarts:** search indexes rebuild from Postgres after each deploy. Uploads and recordings live in Supabase Storage.
+- **Voice:** TURN relay support for browser calls.
+
+## 13. Security notes
 
 - `.env` holds secrets and is gitignored. Provider keys saved in the UI are encrypted with a per-workspace data key wrapped by `UNISONA_MASTER_KEY`, so back that key up.
 - App tables live in the `app` Postgres schema, which the Supabase Data API doesn't expose.

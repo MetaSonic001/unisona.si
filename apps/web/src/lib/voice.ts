@@ -3,6 +3,21 @@
 import { PipecatClient, RTVIEvent } from "@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { API_URL } from "./env";
+
+const STUN: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+
+/** STUN + TURN relay servers from the API (TURN is needed when the API is hosted behind an HTTP-only proxy). */
+async function iceServers(): Promise<RTCIceServer[]> {
+  try {
+    const r = await fetch(`${API_URL}/public/ice-servers`, { cache: "no-store" });
+    if (!r.ok) return STUN;
+    const j = await r.json();
+    return Array.isArray(j.iceServers) && j.iceServers.length ? j.iceServers : STUN;
+  } catch {
+    return STUN;
+  }
+}
 
 export type CallState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "ended" | "error";
 
@@ -38,7 +53,7 @@ export function useVoiceCall() {
           audioRef.current = new Audio();
           audioRef.current.autoplay = true;
         }
-        const transport = new SmallWebRTCTransport({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+        const transport = new SmallWebRTCTransport({ iceServers: await iceServers() });
         const client = new PipecatClient({
           transport,
           enableMic: true,

@@ -21,17 +21,32 @@ _warned: set[str] = set()
 _lock = threading.Lock()
 
 
-def setup_logging(level: str = "INFO") -> None:
+def _plain() -> bool:
+    from .config import settings
+
+    return settings.plain_logs
+
+
+def setup_logging(level: str | None = None) -> None:
+    """Dev: colourful Rich console. Hosted (UNISONA_ENV=production or LOG_FORMAT=plain): one line per record
+    with timestamp, level and subsystem, full tracebacks, unwrapped, so log viewers (Render, etc.) can search them."""
     global _configured
     if _configured:
         return
-    handler = RichHandler(
-        console=console,
-        show_path=False,
-        rich_tracebacks=True,
-        markup=False,
-        log_time_format="%H:%M:%S",
-    )
+    from .config import settings
+
+    level = level or settings.log_level.upper()
+    if _plain():
+        handler: logging.Handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(message)s", "%Y-%m-%dT%H:%M:%S%z"))
+    else:
+        handler = RichHandler(
+            console=console,
+            show_path=False,
+            rich_tracebacks=True,
+            markup=False,
+            log_time_format="%H:%M:%S",
+        )
     logging.basicConfig(level=level, format="%(message)s", handlers=[handler], force=True)
     for noisy in ("httpx", "httpcore", "chromadb", "bm25s", "flashrank", "edge_tts", "mcp", "sse_starlette", "aiortc", "aioice", "urllib3", "asyncio", "multipart", "watchfiles", "onnxruntime"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -40,7 +55,10 @@ def setup_logging(level: str = "INFO") -> None:
         from loguru import logger as _loguru
 
         _loguru.remove()
-        _loguru.add(sys.stderr, level="WARNING", format="<dim>{time:HH:mm:ss}</dim> <level>[pipecat] {message}</level>")
+        if _plain():
+            _loguru.add(sys.stdout, level="WARNING", colorize=False, format="{time:YYYY-MM-DDTHH:mm:ssZZ} {level: <8} [pipecat] {message}")
+        else:
+            _loguru.add(sys.stderr, level="WARNING", format="<dim>{time:HH:mm:ss}</dim> <level>[pipecat] {message}</level>")
     except Exception:
         pass
     _configured = True
@@ -69,6 +87,13 @@ def feature_unavailable(feature: str, env_hint: str, detail: str = "") -> None:
 
 
 def banner(title: str, rows: list[tuple[str, str, str]]) -> None:
+    if _plain():
+        import re
+
+        lg = get_logger("config")
+        for name, status, note in rows:
+            lg.info(f"{re.sub(r'\[/?[a-z ]+\]', '', status):9s} {name} ({note})")
+        return
     table = Table(title=title, show_lines=False, header_style="bold", title_style="bold magenta")
     table.add_column("Feature")
     table.add_column("Status")
@@ -79,5 +104,9 @@ def banner(title: str, rows: list[tuple[str, str, str]]) -> None:
 
 
 def step(msg: str, ok: bool | None = None) -> None:
+    if _plain():
+        lg = get_logger("startup")
+        (lg.error if ok is False else lg.info)(("OK   " if ok else "...  " if ok is None else "FAIL ") + msg)
+        return
     icon = {True: "[green]✔[/green]", False: "[red]✖[/red]", None: "[cyan]…[/cyan]"}[ok]
     console.print(f"{icon} {msg}")

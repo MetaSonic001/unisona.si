@@ -140,7 +140,11 @@ async def _offer(body: dict, background: BackgroundTasks, ws_id: str, agent_id: 
         _CALL_TASKS.add(task)
         task.add_done_callback(_CALL_TASKS.discard)
 
-    return await webrtc_handler().handle_web_request(request=req, webrtc_connection_callback=on_connection)
+    from ..voice.ice import rtc_servers
+
+    handler = webrtc_handler()
+    handler.update_ice_servers(await rtc_servers())
+    return await handler.handle_web_request(request=req, webrtc_connection_callback=on_connection)
 
 
 async def _patch(body: dict):
@@ -244,6 +248,16 @@ async def public_history(conversation_id: str, session_id: str, db: AsyncSession
     msgs = (await db.execute(select(Message).where(Message.conversation_id == conversation_id, Message.role.in_(["user", "assistant", "human"]))
                              .order_by(Message.created_at).limit(100))).scalars().all()
     return {"items": [{"role": m.role, "content": m.content, "ir": m.ir, "created_at": m.created_at.isoformat()} for m in msgs], "status": conv.status}
+
+
+@router.get("/public/ice-servers")
+async def public_ice_servers(request: Request):
+    """STUN/TURN servers for browser voice calls (TURN credentials are short-lived when Cloudflare is used)."""
+    from ..voice.ice import ice_servers
+
+    ip = request.client.host if request.client else "?"
+    ratelimit.check(f"ice:{ip}", 30, 60)
+    return {"iceServers": await ice_servers()}
 
 
 @router.post("/public/voice/{public_key}/offer")

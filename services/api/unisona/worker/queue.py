@@ -17,6 +17,7 @@ from ..config import settings
 from ..db import SessionLocal, new_id, utcnow
 from ..log import get_logger
 from ..models import Job
+from ..ops import db_health, is_db_unavailable
 
 log = get_logger("worker")
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]
@@ -105,10 +106,13 @@ async def worker_loop(stop: asyncio.Event) -> None:
     sem = asyncio.Semaphore(settings.worker_concurrency)
     log.info(f"Worker started ({settings.worker_concurrency} slots, {len(HANDLERS)} job types)")
     running: set[asyncio.Task] = set()
+    backoff = 3.0
     while not stop.is_set():
         try:
             await sem.acquire()
             job = await _claim()
+            db_health.recovered()
+            backoff = 3.0
             if not job:
                 sem.release()
                 _wake.clear()
@@ -129,7 +133,14 @@ async def worker_loop(stop: asyncio.Event) -> None:
             t.add_done_callback(running.discard)
         except Exception as e:
             sem.release()
-            log.error(f"Worker loop error: {e}")
-            await asyncio.sleep(3)
+            if is_db_unavailable(e):
+                db_health.failed(e, "worker")  # logged once per outage, not every few seconds
+                backoff = min(backoff * 2, 60.0)
+            else:
+                log.error(f"Worker loop error: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=backoff)
+            except asyncio.TimeoutError:
+                pass
     for t in running:
         t.cancel()

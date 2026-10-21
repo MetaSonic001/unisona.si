@@ -185,8 +185,13 @@ async function boot() {
     if (client) return endCall();
     callBox.classList.add("on");
     cs.textContent = "connecting";
+    let ice: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+    try {
+      const r = await fetch(`${API}/public/ice-servers`);
+      if (r.ok) { const j = await r.json(); if (Array.isArray(j.iceServers) && j.iceServers.length) ice = j.iceServers; }
+    } catch {}
     client = new PipecatClient({
-      transport: new SmallWebRTCTransport({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }),
+      transport: new SmallWebRTCTransport({ iceServers: ice }),
       enableMic: true, enableCam: false,
       callbacks: {
         onTrackStarted: (t, p) => { if (t.kind === "audio" && !p?.local) { audio.srcObject = new MediaStream([t]); audio.play().catch(() => {}); } },

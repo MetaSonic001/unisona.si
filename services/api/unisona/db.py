@@ -27,11 +27,13 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(
     settings.async_database_url,
-    pool_size=8,
-    max_overflow=6,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=15,
     pool_pre_ping=False,  # each pre-ping is a full round-trip to the remote DB; recycle instead
     pool_recycle=240,
-    connect_args={"statement_cache_size": 0, "server_settings": {"application_name": "unisona-api"}},
+    connect_args={"statement_cache_size": 0, "timeout": 15, "command_timeout": 60,
+                  "server_settings": {"application_name": "unisona-api"}},
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

@@ -78,7 +78,7 @@ async def ingest_source(source_id: str, file_b64: str | None = None) -> dict:
             if data is None:
                 from .files import read_upload
 
-                data = read_upload(ws_id, source_id)
+                data = await read_upload(ws_id, source_id)
             result = extract_file(data, filename)
             if isinstance(result, TableDoc):
                 table = result

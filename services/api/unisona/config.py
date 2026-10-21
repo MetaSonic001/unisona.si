@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -23,7 +24,10 @@ class Settings(BaseSettings):
     unisona_env: str = "development"
     app_url: str = "http://localhost:3000"
     api_url: str = "http://localhost:8000"
-    api_port: int = 8000
+    # API_PORT (local .env) wins; hosts like Render only inject PORT. Kept as two fields because an
+    # environment variable always outranks the .env file, and dev tools often export PORT for the web app.
+    api_port_setting: int = Field(0, validation_alias="API_PORT")
+    port: int = 0
 
     dev_mode: bool = False
     dev_auth_bypass: bool = False
@@ -71,10 +75,45 @@ class Settings(BaseSettings):
     run_worker: bool = True
     worker_concurrency: int = 3
 
+    # ── production hosting ────────────────────────────────────────────────
+    db_pool_size: int = 8
+    db_max_overflow: int = 6
+    log_format: str = ""  # "plain" (one line per record, for hosted log viewers) or "rich"; default: rich in dev
+    log_level: str = "INFO"
+    next_public_supabase_url: str = ""
+    supabase_secret_key: str = ""
+    storage_bucket: str = "unisona-files"
+    # Supabase personal access token (Account → Access Tokens). Local dev only: lets the API restore a project that
+    # Supabase paused after 7 idle days. Account-wide power, so never put it on a server.
+    supabase_access_token: str = ""
+    # WebRTC relay for browser voice calls when the API runs behind an HTTP-only host (Render, Railway, ...).
+    turn_urls: str = ""  # comma-separated, e.g. turn:global.relay.metered.ca:80,turns:global.relay.metered.ca:443?transport=tcp
+    turn_username: str = ""
+    turn_credential: str = ""
+    cloudflare_turn_key_id: str = ""
+    cloudflare_turn_api_token: str = ""
+    reranker_enabled: bool = True  # the multilingual reranker adds ~250 MB RAM; turn off on small instances
+
     # ── derived ────────────────────────────────────────────────────────────
     @property
     def is_dev(self) -> bool:
         return self.unisona_env.lower() in {"dev", "development", "local"}
+
+    @property
+    def api_port(self) -> int:
+        return self.api_port_setting or self.port or 8000
+
+    @property
+    def plain_logs(self) -> bool:
+        return self.log_format == "plain" or (not self.log_format and not self.is_dev)
+
+    @property
+    def remote_storage(self) -> bool:
+        return bool(self.next_public_supabase_url and self.supabase_secret_key)
+
+    @property
+    def turn_configured(self) -> bool:
+        return bool((self.turn_urls and self.turn_username) or (self.cloudflare_turn_key_id and self.cloudflare_turn_api_token))
 
     @property
     def dev_bypass_active(self) -> bool:
@@ -130,6 +169,12 @@ def get_settings() -> Settings:
 settings = get_settings()
 
 
+def _installed(module: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(module) is not None
+
+
 def feature_matrix() -> list[Feature]:
     s = settings
     return [
@@ -148,10 +193,13 @@ def feature_matrix() -> list[Feature]:
         Feature("Speech-to-speech: Gemini Live", bool(s.gemini_api_key), "GEMINI_API_KEY", "or per workspace (BYOK)"),
         Feature("Google Calendar sync", bool(s.google_oauth_client_id and s.google_oauth_client_secret), "GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET"),
         Feature("Instagram + Messenger + WhatsApp webhooks", bool(s.meta_app_secret and s.meta_webhook_verify_token), "META_APP_SECRET + META_WEBHOOK_VERIFY_TOKEN"),
-        Feature("Local STT: faster-whisper", s.local_stt_enabled, "LOCAL_STT_ENABLED", "offline fallback"),
+        Feature("Local STT: faster-whisper", s.local_stt_enabled and _installed("faster_whisper"), "LOCAL_STT_ENABLED", "offline fallback; needs `uv sync --extra local-voice`"),
         Feature("Free TTS: Edge neural voices", True, "-", "322 voices, 142 locales, no key"),
-        Feature("Local TTS: Kokoro", True, "-", "offline English/Hindi/+ voices"),
+        Feature("Local TTS: Kokoro", _installed("kokoro_onnx"), "uv sync --extra local-voice", "offline English/Hindi/+ voices"),
         Feature("Telegram bots (polling)", True, "-", "bot token added per workspace"),
+        Feature("Auto-restore paused Supabase project", bool(s.supabase_access_token), "SUPABASE_ACCESS_TOKEN", "local dev; free projects pause after 7 idle days"),
+        Feature("File storage: Supabase Storage", s.remote_storage, "NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SECRET_KEY", "uploads + recordings survive redeploys; else local disk"),
+        Feature("WebRTC relay (TURN)", s.turn_configured, "TURN_URLS/TURN_USERNAME/TURN_CREDENTIAL or CLOUDFLARE_TURN_*", "needed for browser voice when hosted"),
         Feature("Phone calls + SMS (Twilio/Exotel/Plivo/Telnyx)", bool(s.public_webhook_url), "PUBLIC_WEBHOOK_URL", "plus per-workspace telephony credentials"),
         Feature("Payments: Dodo", bool(s.dodo_payments_api_key), "DODO_PAYMENTS_API_KEY"),
         Feature("Email alerts: Resend", bool(s.resend_api_key and s.alert_from_email), "RESEND_API_KEY + ALERT_FROM_EMAIL"),

@@ -134,7 +134,7 @@ async def upload(files: list[UploadFile] = File(...), kb_id: str | None = Form(N
         if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
             raise HTTPException(413, f"{name} is larger than {MAX_UPLOAD_MB} MB")
         src_id = new_id("src")
-        save_upload(auth.ws, src_id, data)
+        await save_upload(auth.ws, src_id, data)
         typ = "table" if name.lower().endswith(TABLE_EXT) else "file"
         src = KnowledgeSource(id=src_id, workspace_id=auth.ws, kb_id=kb, type=typ, title=name, uri=name,
                               meta={"filename": name, "bytes": len(data)}, when_to_use=when_to_use)

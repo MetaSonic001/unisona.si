@@ -7,6 +7,11 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, ".env");
 if (!existsSync(src)) {
+  // Hosted builds (Vercel, CI) get their variables from the platform, not from a file.
+  if (process.env.VERCEL || process.env.CI) {
+    console.log("• No root .env (hosted build): using the platform's environment variables");
+    process.exit(0);
+  }
   console.error("✖ No .env at repo root. Copy .env.example to .env and fill it in.");
   process.exit(1);
 }

@@ -66,12 +66,18 @@ export function useApi() {
       if (wsHeader) headers["x-workspace-id"] = wsHeader;
       const isForm = typeof FormData !== "undefined" && body instanceof FormData;
       if (body !== undefined && !isForm) headers["content-type"] = "application/json";
-      const res = await fetch(`${API_URL}${path}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-        ...init,
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${API_URL}${path}`, {
+          method,
+          headers,
+          body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+          ...init,
+        });
+      } catch (e) {
+        if ((e as Error)?.name === "AbortError") throw e;
+        throw new ApiError("Can't reach the server. Check your connection, or the API may be restarting", 0);
+      }
       if (!res.ok) {
         let msg = `Request failed (${res.status})`;
         try {

@@ -19,17 +19,23 @@ log = get_logger("api")
 
 async def _check_db() -> bool:
     from .db import engine
+    from .ops import db_health
 
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("select 1"))
-            n = (await conn.execute(text(f"select count(*) from information_schema.tables where table_schema = '{settings.db_schema}'"))).scalar()
+        async def _q():
+            async with engine.connect() as conn:
+                await conn.execute(text("select 1"))
+                return (await conn.execute(text(f"select count(*) from information_schema.tables where table_schema = '{settings.db_schema}'"))).scalar()
+        n = await asyncio.wait_for(_q(), 20)
+        db_health.recovered()
         step(f"Database connected (schema '{settings.db_schema}', {n} tables)", True)
         if n < 10:
-            log.warning("Schema looks empty. Run:  pnpm db:migrate")
+            log.warning("Schema looks empty. Run:  pnpm db:migrate  (on Render this runs on every start)")
         return True
     except Exception as e:
-        step(f"Database connection failed: {e}", False)
+        db_health.failed(e, "startup")
+        step(f"Database connection failed: {str(e).splitlines()[0][:300]}. The API keeps running and retries; "
+             "check DATABASE_URL, and that the Supabase project is not paused.", False)
         return False
 
 
@@ -45,8 +51,14 @@ async def _warmup() -> None:
         step(f"Embedding model warmed up ({time.perf_counter() - t0:.1f}s). Knowledge search is ready.", True)
         from .knowledge.retrieve import _ranker_sync
 
-        await asyncio.to_thread(_ranker_sync)
-        step("Multilingual reranker ready", True)
+        if settings.reranker_enabled:
+            await asyncio.to_thread(_ranker_sync)
+            step("Multilingual reranker ready", True)
+        from .knowledge.heal import heal_indexes
+
+        healed = await heal_indexes()
+        if healed:
+            step(f"Rebuilt local search indexes for {healed} knowledge base(s) from the database", True)
         from .providers.voices import catalog
 
         await catalog()
@@ -65,7 +77,13 @@ async def _warmup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    console.rule("[bold magenta]Unisona API starting")
+    if settings.plain_logs:
+        setup_logging()
+        for noisy in ("httpx", "httpcore", "openai", "groq"):
+            __import__("logging").getLogger(noisy).setLevel("WARNING")
+        log.info(f"Unisona API starting (env={settings.unisona_env}, port={settings.api_port})")
+    else:
+        console.rule("[bold magenta]Unisona API starting")
     rows = [(f.name, "[green]enabled[/green]" if f.enabled else "[yellow]disabled[/yellow]", f.env + (f" — {f.note}" if f.note else "")) for f in feature_matrix()]
     banner("Feature status (from .env)", rows)
     for f in feature_matrix():
@@ -73,17 +91,22 @@ async def lifespan(app: FastAPI):
             log.info(f"Feature off: {f.name}. To enable, set {f.env}.")
         if not f.enabled and f.note == "required":
             log.error(f"REQUIRED setting missing: {f.env}. {f.name} will not work.")
+    from .main import _exit_with_dev_runner
+    from .ops import install_loop_handler, supervise, watchdog
+
+    _exit_with_dev_runner()  # also in the auto-reload worker process, which outlives a hard-killed parent otherwise
+    install_loop_handler()
     await _check_db()
 
     stop = asyncio.Event()
-    tasks: list[asyncio.Task] = []
+    tasks: list[asyncio.Task] = [asyncio.create_task(watchdog(stop))]
     async with AsyncExitStack() as stack:
         if settings.run_worker:
             from .worker.jobs import scheduler_loop
             from .worker.queue import worker_loop
 
-            tasks.append(asyncio.create_task(worker_loop(stop)))
-            tasks.append(asyncio.create_task(scheduler_loop(stop)))
+            tasks.append(asyncio.create_task(supervise("worker", lambda: worker_loop(stop), stop)))
+            tasks.append(asyncio.create_task(supervise("scheduler", lambda: scheduler_loop(stop), stop)))
             step("Background worker + scheduler running inside the API process", True)
         else:
             step("RUN_WORKER=false: start the worker separately with `pnpm dev:worker`", None)
@@ -99,7 +122,10 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(app.state.mcp.session_manager.run())
             step("MCP server mounted at /mcp (auth: workspace API key)", True)
         tasks.append(asyncio.create_task(_warmup()))
-        console.rule(f"[bold green]API ready on {settings.api_url}  ·  docs: {settings.api_url}/docs")
+        if settings.plain_logs:
+            log.info(f"API ready on {settings.api_url} (docs: {settings.api_url}/docs)")
+        else:
+            console.rule(f"[bold green]API ready on {settings.api_url}  ·  docs: {settings.api_url}/docs")
         step("Waiting for: embedding model + voice engine warmup (watch for ✔ lines above/below)", None)
         yield
         stop.set()
@@ -112,7 +138,10 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Unisona API", version="1.0.0", lifespan=lifespan,
                   description="One brain, many voices: omnichannel AI agents with shared memory, glass-box RAG and a built-in CRM.")
+    from .ops import ErrorMiddleware
+
     origins = {settings.app_url, "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"}
+    app.add_middleware(ErrorMiddleware)  # added first = inside CORS, so error responses still carry CORS headers
     app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_origin_regex=r"https?://.*",
                        allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
@@ -123,8 +152,15 @@ def create_app() -> FastAPI:
         app.include_router(r)
 
     widget_dist = ROOT_DIR / "apps" / "widget" / "dist"
-    widget_dist.mkdir(parents=True, exist_ok=True)
-    app.mount("/widget", StaticFiles(directory=str(widget_dist)), name="widget")
+    if (widget_dist / "widget.js").exists():
+        app.mount("/widget", StaticFiles(directory=str(widget_dist)), name="widget")
+    else:
+        # Hosted API without a widget build: the web app (Vercel) serves the same file from /widget/widget.js.
+        from fastapi.responses import RedirectResponse
+
+        @app.get("/widget/{path:path}", include_in_schema=False)
+        async def widget_redirect(path: str):
+            return RedirectResponse(f"{settings.app_url.rstrip('/')}/widget/{path}", status_code=307)
 
     try:
         from .services.mcp_server import ApiKeyMiddleware, build_server

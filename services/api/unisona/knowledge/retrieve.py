@@ -146,7 +146,7 @@ async def retrieve(db: AsyncSession | None, ws_id: str, kb_ids: list[str], query
 
     candidates = sorted(by_id.values(), key=lambda c: -c.score)
     top = candidates[: max(k * 2, 10)]
-    if mode == "deep" and len(top) > 1:
+    if mode == "deep" and len(top) > 1 and settings.reranker_enabled:
         t2 = time.perf_counter()
         try:
             scores = await asyncio.to_thread(_rerank_sync, query, top)

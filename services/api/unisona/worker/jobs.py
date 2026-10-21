@@ -113,6 +113,9 @@ async def scheduler_loop(stop: asyncio.Event) -> None:
     last_nightly: dict[str, str] = {}
     last_refresh = utcnow() - timedelta(hours=23)
     log.info("Scheduler started (campaigns every 20s, improve loop nightly 02:00 workspace time, source refresh daily)")
+    from ..ops import db_health, is_db_unavailable
+
+    wait = 20.0
     while not stop.is_set():
         try:
             await tick()
@@ -129,9 +132,15 @@ async def scheduler_loop(stop: asyncio.Event) -> None:
                     for src in (await db.execute(select(KnowledgeSource).where(KnowledgeSource.refresh_days > 0))).scalars():
                         if not src.last_ingested_at or utcnow() - src.last_ingested_at > timedelta(days=src.refresh_days):
                             await enqueue("knowledge.ingest", {"source_id": src.id}, workspace_id=src.workspace_id)
+            db_health.recovered()
+            wait = 20.0
         except Exception as e:
-            log.warning(f"Scheduler tick error: {e}")
+            if is_db_unavailable(e):
+                db_health.failed(e, "scheduler")
+                wait = min(wait * 2, 120.0)
+            else:
+                log.warning(f"Scheduler tick error: {type(e).__name__}: {e}", exc_info=True)
         try:
-            await asyncio.wait_for(stop.wait(), timeout=20)
+            await asyncio.wait_for(stop.wait(), timeout=wait)
         except asyncio.TimeoutError:
             pass

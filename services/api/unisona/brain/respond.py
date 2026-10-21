@@ -37,7 +37,7 @@ from . import cache
 from . import handoff as handoff_mod
 from .agent_config import fill_vars, normalize
 from .identity import resolve_contact
-from .lang import detect
+from .lang import detect, sticky
 from .memory import contact_brief
 from .prompts import build_sections, join_sections
 from .render import render
@@ -235,7 +235,7 @@ async def respond_events(db: AsyncSession, turn: Turn) -> AsyncIterator[dict[str
     timings["conversation"] = int((time.perf_counter() - t0) * 1000)
     yield {"type": "meta", "conversation_id": conv.id, "contact_id": contact.id if contact else None, "created": created}
 
-    language = detect(turn.text)
+    language = detect(turn.text) if created else sticky(conv.language, turn.text, detect(turn.text))
     conv.language = language
     guard = await guard_task
     timings["guard"] = int((time.perf_counter() - t_start) * 1000) - timings["conversation"]

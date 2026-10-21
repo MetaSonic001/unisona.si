@@ -23,7 +23,21 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    return {"ok": True, "service": "unisona-api"}
+    """Liveness (used by Render's health check): the process and event loop respond. No database call, so a
+    database outage doesn't make the platform restart the API in a loop; see /health/ready for dependencies."""
+    from ..ops import db_health
+
+    return {"ok": True, "service": "unisona-api", "db_ok": db_health.ok}
+
+
+@router.get("/health/ready")
+async def ready():
+    from fastapi.responses import JSONResponse
+
+    from ..ops import check_db, db_health
+
+    ok = await check_db(timeout=5)
+    return JSONResponse({"ok": ok, "db": "ok" if ok else db_health.last_error or "unreachable"}, status_code=200 if ok else 503)
 
 
 @router.get("/status")

@@ -150,7 +150,7 @@ async def seed_demo(db: AsyncSession, ws: Workspace) -> dict:
     srcs = [KnowledgeSource(workspace_id=ws.id, kb_id=dkb.id, type="text", title="BrightSmile patient information", meta={"text": DENTAL_DOC}),
             KnowledgeSource(workspace_id=ws.id, kb_id=skb.id, type="text", title="ShopKart help centre", meta={"text": SHOP_POLICY})]
     orders_id = new_id("src")
-    save_upload(ws.id, orders_id, ORDERS_CSV.encode())
+    await save_upload(ws.id, orders_id, ORDERS_CSV.encode())
     srcs.append(KnowledgeSource(id=orders_id, workspace_id=ws.id, kb_id=skb.id, type="table", title="orders.csv", uri="orders.csv",
                                 meta={"filename": "orders.csv"}))
     db.add_all(srcs)

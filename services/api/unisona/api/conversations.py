@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,4 +256,9 @@ async def recording(call_id: str, auth: AuthContext = Depends(require_auth), db:
     c = await get_scoped(db, Call, call_id, auth)
     if not c.recording_path:
         raise HTTPException(404, "No recording")
-    return FileResponse(c.recording_path, media_type="audio/wav")
+    from ..knowledge.files import read_recording
+
+    data = await read_recording(c.recording_path)
+    if data is None:
+        raise HTTPException(404, "The recording file is no longer available.")
+    return Response(data, media_type="audio/wav")

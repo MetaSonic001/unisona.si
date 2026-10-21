@@ -1,0 +1,107 @@
+# Render Blueprint for the Unisona API (FastAPI + voice + worker in one process). No Docker: native Python runtime.
+# Deploy: Render dashboard → New → Blueprint → pick this repo. Fill the `sync: false` values when prompted.
+# The web app (apps/web) deploys separately on Vercel: see apps/web/vercel.json and docs/deploy.md.
+services:
+  - type: web
+    name: unisona-api
+    runtime: python
+    # Singapore is the closest Render region to the Supabase project (Tokyo) and to users in India.
+    region: singapore
+    # The API holds a multilingual embedding model, reranker and voice models in memory (~0.8–1.1 GB),
+    # so the 512 MB Free/Starter instances run out of memory. Standard = 2 GB.
+    plan: standard
+    rootDir: services/api
+    buildCommand: >-
+      pip install --upgrade uv &&
+      uv sync --frozen --no-dev &&
+      uv pip install --upgrade edge-tts &&
+      uv run --no-sync python -m unisona.prefetch
+    # `uv pip install --upgrade edge-tts`: Microsoft periodically rotates the token the free Edge voices need,
+    # and old edge-tts versions then get HTTP 403. Each deploy picks up the latest fix automatically.
+    # Migrations run on every start (idempotent). If they fail the API still starts and the logs say why.
+    startCommand: >-
+      (uv run --no-sync alembic upgrade head || echo "WARNING: database migration failed, see the error above") &&
+      exec uv run --no-sync python -m unisona.main
+    # Liveness only (no DB call): a database outage returns 503s with a clear log line instead of a restart loop.
+    # Render restarts the service if this stops answering, and the process exits by itself on fatal errors
+    # (out of memory, event loop stuck for 90 s), so it always comes back.
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: UNISONA_ENV
+        value: production
+      - key: LOG_FORMAT
+        value: plain
+      - key: DEV_MODE
+        value: "false"
+      - key: DEV_AUTH_BYPASS
+        value: "false"
+      - key: LOCAL_STT_ENABLED
+        value: "false"
+      - key: DB_SCHEMA
+        value: app
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+      - key: CHROMA_MODE
+        value: embedded
+      - key: DATA_DIR
+        value: ./data
+      - key: CHROMA_PATH
+        value: ./data/chroma
+      # Your Vercel URL (CORS, links in emails, widget redirect) and this service's own public URL.
+      - key: APP_URL
+        sync: false
+      - key: API_URL
+        sync: false
+      - key: PUBLIC_WEBHOOK_URL
+        sync: false
+      # Required
+      - key: DATABASE_URL
+        sync: false
+      - key: UNISONA_MASTER_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Persistent files (uploads, call recordings) in Supabase Storage
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # Browser voice calls need a TURN relay on Render (no inbound UDP). Cloudflare: free tier.
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
+      # Optional platform keys (BYOK per workspace works without them)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: DODO_PAYMENTS_API_KEY
+        sync: false
+      - key: DODO_WEBHOOK_SECRET
+        sync: false
+      - key: DODO_ENVIRONMENT
+        value: test_mode
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_FROM_EMAIL
+        sync: false
+      - key: SLACK_ALERT_WEBHOOK_URL
+        sync: false

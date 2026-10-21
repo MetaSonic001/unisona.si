@@ -32,7 +32,10 @@ function Gate({ children }: { children: React.ReactNode }) {
     return (
       <div className="mx-auto mt-24 max-w-md rounded-xl border p-6 text-center">
         <p className="font-medium">Can&apos;t reach the Unisona API</p>
-        <p className="mt-2 text-sm text-muted-foreground">{error.message}. Make sure the API is running (`pnpm dev:api`) on {process.env.NEXT_PUBLIC_API_URL}.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {error.message}.
+          {process.env.NODE_ENV !== "production" && <> Make sure the API is running (`pnpm dev:api`) on {process.env.NEXT_PUBLIC_API_URL}.</>}
+        </p>
         <Button className="mt-4" variant="outline" onClick={() => location.reload()}>
           Retry
         </Button>

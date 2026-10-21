@@ -12,6 +12,7 @@ chat, so memory is shared across channels.
 from __future__ import annotations
 
 import asyncio
+import io
 import random
 import re
 import time
@@ -61,7 +62,7 @@ from ..brain import flows
 from ..brain.tools import DYNAMIC_TOOLS, ToolContext, dynamic_schemas, execute
 from ..config import settings
 from ..db import SessionLocal, new_id, utcnow
-from ..knowledge.files import recording_path
+from ..knowledge.files import save_recording
 from ..knowledge.retrieve import retrieve
 from ..log import feature_unavailable, get_logger
 from ..models import Agent, Call, Channel, Contact, Conversation, Trace, Workspace
@@ -482,6 +483,13 @@ def _lang_enum(cfg: dict):
         return Language("en-IN")
 
 
+def _installed(module: str) -> bool:
+    """Optional local engines (`uv sync --extra local-voice`) are not installed on hosted deployments."""
+    import importlib.util
+
+    return importlib.util.find_spec(module) is not None
+
+
 def _stt_language(cfg: dict) -> str | None:
     """Whisper language hint. Pipecat defaults Whisper services to English, which makes Whisper *translate* Hindi, Tamil
     or any other speech into English before the agent ever sees it. We auto-detect unless the agent speaks one language."""
@@ -539,7 +547,7 @@ def _stt(cfg: dict, groq_key: str | None, openai_key: str | None, deepgram_key: 
         svc = _auto_language_stt(OpenAISTTService)(api_key=openai_key)
         svc._settings.language = _stt_language(cfg)
         return svc, "openai"
-    if settings.local_stt_enabled:
+    if settings.local_stt_enabled and _installed("faster_whisper"):
         from pipecat.services.whisper.stt import WhisperSTTService
 
         feature_unavailable("Cloud speech-to-text (fast)", "GROQ_API_KEY", "falling back to local Whisper on CPU, slower")
@@ -575,7 +583,7 @@ def _tts(cfg: dict, groq_key: str | None, keys: dict | None = None):
         from pipecat.services.openai.tts import OpenAITTSService
 
         return OpenAITTSService(api_key=k["openai"], settings=OpenAITTSService.Settings(voice=name or "marin", model="gpt-4o-mini-tts")), "openai"
-    if engine == "kokoro":
+    if engine == "kokoro" and _installed("kokoro_onnx"):
         from pipecat.services.kokoro.tts import KokoroTTSService
         from pipecat.transcriptions.language import Language
 
@@ -964,13 +972,13 @@ async def _finalize(sess: VoiceSession) -> None:
     rec = None
     if sess.audio:
         try:
-            path = recording_path(sess.ws_id, sess.call_id)
-            with wave.open(str(path), "wb") as w:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
                 w.setnchannels(1)
                 w.setsampwidth(2)
                 w.setframerate(sess.audio_rate)
                 w.writeframes(bytes(sess.audio))
-            rec = str(path)
+            rec = await save_recording(sess.ws_id, sess.call_id, buf.getvalue())
         except Exception as e:
             log.warning(f"Recording save failed: {e}")
     async with SessionLocal() as db:

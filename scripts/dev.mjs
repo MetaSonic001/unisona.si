@@ -48,9 +48,15 @@ for (const [port, host, what] of [[8000, "127.0.0.1", "API"], [3000, "::", "web 
 }
 
 const procs = [];
-function run(tag, command, cwd) {
-  log(tag, `${c.dim}starting: ${command}${c.reset}`);
-  const p = spawn(command, { cwd, shell: true, env: { ...process.env, FORCE_COLOR: "1", PYTHONUNBUFFERED: "1" } });
+function run(tag, command, cwd, { ownConsole = false, args = null } = {}) {
+  log(tag, `${c.dim}starting: ${args ? [command, ...args].join(" ") : command}${c.reset}`);
+  // ownConsole (Windows): uvicorn's auto-reload restarts its worker with a CTRL_C_EVENT, which Windows delivers to
+  // every process on the same console, including this runner, which then shut everything down on each code edit.
+  // A detached, hidden console keeps that event inside the API's own process group. Ctrl+C here still stops it (taskkill).
+  const detached = ownConsole && process.platform === "win32";
+  const opts = { cwd, detached, windowsHide: true,
+    env: { ...process.env, FORCE_COLOR: "1", PYTHONUNBUFFERED: "1", UNISONA_DEV_PARENT_PID: String(process.pid) } };
+  const p = args ? spawn(command, args, opts) : spawn(command, { ...opts, shell: true });
   const pipe = (stream) => {
     let buf = "";
     stream.on("data", (d) => {
@@ -86,7 +92,7 @@ function shutdown(code = 0) {
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-run("api", "uv run python -m unisona.main --reload", join(root, "services", "api"));
+run("api", "uv", join(root, "services", "api"), { ownConsole: true, args: ["run", "python", "-m", "unisona.main", "--reload"] });
 run("web", `${bin("web", "next")} dev`, join(root, "apps", "web"));
 
 setTimeout(() => {

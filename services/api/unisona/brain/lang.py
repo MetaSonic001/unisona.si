@@ -42,12 +42,18 @@ def detect(text: str) -> str:
         return code
     if len(_HINGLISH.findall(t)) >= 2:
         return "hinglish"
+    # Latin script: only trust the statistical guess on real sentences. Short inputs, order ids and
+    # names ("Order ORD-1001", "ok thanks") are misread as German/Dutch/etc., so they default to English
+    # (callers keep the conversation's earlier language via sticky()).
+    words = [w for w in re.findall(r"[^\W\d_]+", t) if len(w) > 1]
+    if len(words) < 4:
+        return "en"
     try:
-        from langdetect import DetectorFactory, detect as ld
+        from langdetect import DetectorFactory, detect_langs
 
         DetectorFactory.seed = 0
-        guess = ld(t)
-        return guess.split("-")[0] if len(t) > 12 else "en"
+        best = detect_langs(t)[0]
+        return best.lang.split("-")[0] if best.prob >= 0.6 else "en"
     except Exception:
         return "en"
 
@@ -63,8 +69,8 @@ NAMES = {"en": "English", "hi": "Hindi", "hinglish": "Hinglish (Hindi in Latin s
 
 
 def sticky(previous: str | None, text: str, current: str) -> str:
-    """Keep the conversation language when a short reply is ambiguous ("ok", "yes", "haan ji")."""
-    if previous and previous != "en" and current == "en" and len(text.split()) <= 3:
+    """Keep the conversation language when a short reply is ambiguous ("ok", "yes", "haan ji", "ORD-1001")."""
+    if previous and previous != "en" and current == "en" and len(text.split()) <= 4:
         return previous
     return current
 
